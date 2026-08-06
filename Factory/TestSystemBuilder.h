@@ -1,216 +1,215 @@
+#pragma once
+
+#include "Factory.h"
+
+// ============================================================================
+// Description d'un lien
+// ============================================================================
+
+struct ComponentLink
+{
+    std::string senderComponent;
+    std::string senderPort;
+    std::string receiverComponent;
+    std::string receiverPort;
+};
+
+// ============================================================================
+// Builder du système de test
+// ============================================================================
+
 class TestSystemBuilder
 {
 public:
-    TestSystemBuilder(
-        ContainerRegistry& containers,
-        ArchitectureRegistry& architecture,
-        const ComponentFactoryRegistry& componentFactories)
-        : containers_(containers),
-          architecture_(architecture),
-          componentFactories_(componentFactories)
+    explicit TestSystemBuilder(const ComponentDefinitionRegistry& definitions)
+        : _definitions(definitions)
+        , _architecture(_containers)
     {
     }
 
     TestSystemBuilder(const TestSystemBuilder&) = delete;
     TestSystemBuilder& operator=(const TestSystemBuilder&) = delete;
 
-    template<
-        typename Interface,
-        typename Implementation,
-        typename... Args
-    >
-    void registerDefaultObject(
-        const std::string& objectName,
-        Args&&... args)
+    TestSystemBuilder& addComponent(const std::string& instanceName, const std::string& componentTypeName)
     {
-        static_assert(
-            std::is_base_of_v<Interface, Implementation>,
-            "Implementation doit heriter de Interface"
-        );
+        ensureNotBuilt();
 
         /*
-         * Les arguments sont stockes par valeur dans le tuple.
-         * La factory pourra être appelée plus tard pendant build().
+         * Vérification immédiate de l'existence de la définition.
          */
-        auto constructorArguments =
-            std::make_tuple(
-                std::forward<Args>(args)...
-            );
+        _definitions.getDefinition(componentTypeName);
 
-        objectFactories_.registerDefault<Interface>(
-            objectName,
-            [this,
-             objectName,
-             constructorArguments =
-                 std::move(constructorArguments)]() mutable
-                -> std::unique_ptr<Interface>
-            {
-                return std::apply(
-                    [this, &objectName](auto&&... values)
-                        -> std::unique_ptr<Interface>
-                    {
-                        return makeObserved<
-                            Interface,
-                            Implementation
-                        >(
-                            observers_,
-                            objectName,
-                            std::forward<
-                                decltype(values)
-                            >(values)...
-                        );
-                    },
-                    constructorArguments
-                );
-            }
-        );
+        const auto [iterator, inserted] = _selectedInstances.emplace(instanceName, componentTypeName);
+
+        if (!inserted)
+        {
+            throw std::logic_error("Instance déjà ajoutée : " + instanceName);
+        }
+
+        return *this;
     }
 
-    template<
-        typename Interface,
-        typename Implementation,
-        typename... Args
-    >
-    void overrideObject(
-        const std::string& objectName,
-        Args&&... args)
+    template<typename TInterface, typename TImplementation, typename... TArgs>
+    TestSystemBuilder& overrideObject(const std::string& componentName, const std::string& localObjectName, TArgs&&... args)
     {
-        static_assert(
-            std::is_base_of_v<Interface, Implementation>,
-            "Implementation doit heriter de Interface"
-        );
+        ensureNotBuilt();
 
-        auto constructorArguments =
-            std::make_tuple(
-                std::forward<Args>(args)...
-            );
+        static_assert(std::is_base_of_v<TInterface, TImplementation>, "TImplementation doit dériver de TInterface");
 
-        objectFactories_.overrideFactory<Interface>(
-            objectName,
-            [this,
-             objectName,
-             constructorArguments =
-                 std::move(constructorArguments)]() mutable
-                -> std::unique_ptr<Interface>
-            {
-                return std::apply(
-                    [this, &objectName](auto&&... values)
-                        -> std::unique_ptr<Interface>
-                    {
-                        return makeObserved<
-                            Interface,
-                            Implementation
-                        >(
-                            observers_,
-                            objectName,
-                            std::forward<
-                                decltype(values)
-                            >(values)...
-                        );
+        const std::string objectKey = makeObjectKey(componentName, localObjectName);
+
+        auto arguments = std::make_tuple(std::forward<TArgs>(args)...);
+
+        _injectedObjects.overrideProvider<TInterface>(objectKey, [objectKey, observerRegistry = &_observers, arguments = std::move(arguments)]() mutable -> std::unique_ptr<TInterface> {
+                return std::apply([objectKey, observerRegistry](const auto&... values) -> std::unique_ptr<TInterface> {
+                        return makeObserved<TInterface, TImplementation>(*observerRegistry, objectKey, values...);
                     },
-                    constructorArguments
+                    arguments
                 );
             }
         );
+
+        return *this;
     }
 
     void build()
     {
-        if (built_)
+        ensureNotBuilt();
+
+        if (_selectedInstances.empty())
         {
-            throw std::logic_error(
-                "Le systeme de test est deja construit"
+            throw std::logic_error("Aucun composant sélectionné");
+        }
+
+        /*
+         * 1. Création des containers.
+         * 2. Installation des définitions d'objets par défaut.
+         */
+        for (const auto& [instanceName, componentTypeName] : _selectedInstances)
+        {
+            const ComponentDefinition& definition = _definitions.getDefinition(componentTypeName);
+
+            _containers.insertContainer(instanceName, definition.createContainer());
+
+            for (const auto& objectDefinition : definition.defaultObjects)
+            {
+                objectDefinition.registerDefault(instanceName, _injectedObjects, _observers);
+            }
+        }
+
+        /*
+         * Instanciation de tous les composants.
+         */
+        for (const auto& [instanceName, componentTypeName] : _selectedInstances)
+        {
+            ComponentBuildContext context{
+                instanceName,
+                _containers,
+                _injectedObjects,
+                _observers,
+                _components,
+                _architecture
+            };
+
+            _definitions
+                .getDefinition(componentTypeName)
+                .instantiate(context);
+        }
+
+        /*
+         * Connexion des composants.
+         *
+         * Les liens dont une extrémité n'est pas sélectionnée sont ignorés.
+         */
+        for (const auto& link : _links)
+        {
+            if (!isComponentSelected(link.senderComponent) || !isComponentSelected(link.receiverComponent))
+            {
+                continue;
+            }
+
+            _architecture.connect(
+                link.senderComponent,
+                link.senderPort,
+                link.receiverComponent,
+                link.receiverPort
             );
         }
 
-        ComponentBuildContext context{
-            containers_,
-            objectFactories_,
-            observers_,
-            components_,
-            architecture_
-        };
-
-        componentFactories_.buildAll(context);
-
-        /*
-         * Les connexions doivent être construites après tous
-         * les composants et tous les ports d'entrée.
-         */
-        connectArchitecture();
-
-        built_ = true;
+        _built = true;
     }
 
-    template<typename Component>
-    Component& component(const std::string& name)
+    template<typename TComponent>
+    TComponent& getComponent(const std::string& componentName)
     {
         ensureBuilt();
 
-        return components_.get<Component>(name);
+        return _components.getComponent<TComponent>(componentName);
     }
 
-    template<typename Mock>
-    Mock& mock(const std::string& name)
+    template<typename TObject>
+    TObject& getObject(const std::string& componentName, const std::string& localObjectName)
     {
         ensureBuilt();
 
-        return observers_.get<Mock>(name);
+        return _observers.getObject<TObject>(makeObjectKey(componentName, localObjectName));
     }
 
-    ObjectFactoryRegistry& objectFactories() noexcept
+    template<typename TContainer>
+    TContainer& getContainer(const std::string& componentName)
     {
-        return objectFactories_;
-    }
+        ensureBuilt();
 
-    ObserverRegistry& observers() noexcept
-    {
-        return observers_;
-    }
-
-    ComponentStore& components() noexcept
-    {
-        return components_;
+        return _containers.getContainer<TContainer>(componentName);
     }
 
 private:
-    void ensureBuilt() const
+    bool isComponentSelected(const std::string& componentName) const
     {
-        if (!built_)
+        return _selectedComponents.find(componentName) != _selectedComponents.end();
+    }
+
+    void ensureNotBuilt() const
+    {
+        if (_built)
         {
-            throw std::logic_error(
-                "Le systeme de test n'est pas construit"
-            );
+            throw std::logic_error("Le système de test est déjà construit");
         }
     }
 
-    void connectArchitecture()
+    void ensureBuilt() const
     {
-        /*
-         * À remplacer par :
-         *
-         * - les connexions codées en dur ;
-         * - ou le chargement des liens XML.
-         *
-         * Exemple :
-         *
-         * architecture_.connect(
-         *     "ComponentA",
-         *     "dataPort",
-         *     "ComponentB",
-         *     "dataPort"
-         * );
-         */
+        if (!_built)
+        {
+            throw std::logic_error("Le système de test n'est pas construit");
+        }
     }
 
-    ContainerRegistry& containers_;
-    ArchitectureRegistry& architecture_;
+    std::unordered_map<std::string, std::string> _selectedInstances;
 
-    const ComponentFactoryRegistry& componentFactories_;
+    const ComponentDefinitionRegistry& _definitions;
 
-    ObjectFactoryRegistry objectFactories_;
-    ObserverRegistry observers_;
-    ComponentStore components_;
+    std::unordered_set<std::string>  _selectedComponents;
 
-    bool built_{false};
+    std::vector<ComponentLink> _links;
+
+    /*
+     * Destruction en ordre inverse :
+     *
+     * _architecture
+     * _components
+     * _observers
+     * _injectedObjects
+     * _containers
+     *
+     * Les callbacks d'entrée sont donc détruits avant les composants,
+     * et les composants avant les containers.
+     */
+    TestContainerStore _containers;
+    InjectedObjectRegistry _injectedObjects;
+    ObserverRegistry _observers;
+    ComponentStore _components;
+    ArchitectureRegistry _architecture;
+
+    bool _built{false};
 };
