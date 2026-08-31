@@ -72,6 +72,28 @@ public:
         return *this;
     }
 
+    TestSystemBuilder& loadArchitecture(const ArchitectureDescription& architecture)
+    {
+        ensureNotBuilt();
+
+        for (const auto& instance : architecture.instances)
+        {
+            addComponentInstance(instance.instanceName, instance.componentType);
+        }
+
+        for (const auto& link : architecture.links)
+        {
+            defineConnection(
+                link.senderInstance,
+                link.senderPort,
+                link.receiverInstance,
+                link.receiverPort
+            );
+        }
+
+        return *this;
+    }
+
     void build()
     {
         ensureNotBuilt();
