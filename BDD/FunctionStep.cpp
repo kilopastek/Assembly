@@ -6,12 +6,12 @@
 namespace bdd
 {
     FunctionStep::FunctionStep(StepType type, std::string pattern, StepFunction function)
-        : type_{type}
-        , pattern_{std::move(pattern)}
-        , regex_{compilePattern(pattern_)}
-        ,  function_{function}
+        : _type{type}
+        , _pattern{std::move(pattern)}
+        , _regex{compilePattern(_pattern)}
+        ,  _function{function}
     {
-        if (function_ == nullptr)
+        if (_function == nullptr)
         {
             throw std::invalid_argument("Fonction de step BDD nulle");
         }
@@ -19,19 +19,19 @@ namespace bdd
 
     StepType FunctionStep::type() const noexcept
     {
-        return type_;
+        return _type;
     }
 
     const std::string& FunctionStep::pattern() const noexcept
     {
-        return pattern_;
+        return _pattern;
     }
 
     std::optional<StepArguments> FunctionStep::match(const std::string& text) const
     {
         std::smatch matches;
 
-        if (!std::regex_match(text, matches, regex_))
+        if (!std::regex_match(text, matches, _regex))
         {
             return std::nullopt;
         }
@@ -50,7 +50,7 @@ namespace bdd
 
     void FunctionStep::execute(ScenarioContext& context, const StepArguments& arguments) const
     {
-        function_(context, arguments);
+        _function(context, arguments);
     }
 
     std::regex FunctionStep::compilePattern(const std::string& pattern)
@@ -68,7 +68,7 @@ namespace bdd
             }
             else if (pattern.compare(position, 6, "{uint}") == 0)
             {
-                expression += R"((?:0[xX][0-9a-fA-F]+|[0-9]+))";
+                expression += R"((0[xX][0-9a-fA-F]+|[0-9]+))";
                 position += 6;
             }
             else if (pattern.compare(position, 8, "{double}") == 0)
