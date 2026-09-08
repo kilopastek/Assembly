@@ -78,7 +78,7 @@ public:
 
         for (const auto& instance : architecture.instances)
         {
-            addComponentInstance(instance.instanceName, instance.componentType);
+            addComponent(instance.instanceName, instance.componentType);
         }
 
         for (const auto& link : architecture.links)
