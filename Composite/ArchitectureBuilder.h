@@ -9,13 +9,13 @@
 #include "LinkResolver.h"
 #include "ImplicitLinkResolver.h"
 #include "DelegationResolver.h"
+#include "ComponentFactoryRegistry.h"
 
 class ArchitectureBuilder
 {
 public:
-    ArchitectureBuilder(IComponentFactory& componentFactory, ICompositeFactory& compositeFactory)
-        : _componentFactory(componentFactory)
-        , _compositeFactory(compositeFactory)
+    explicit ArchitectureBuilder(ComponentFactoryRegistry& componentFactories)
+        : _componentFactories(componentFactories)
     {
     }
 
@@ -23,6 +23,9 @@ public:
     {
         _architecture = &architecture;
 
+        /*
+         * Scope racine synthétique.
+         */
         auto root = std::make_unique<CompositeInstance>("$root");
 
         buildScope(*root, architecture);
@@ -33,123 +36,106 @@ public:
 private:
     void buildScope(CompositeInstance& scope, const ScopeDescription& description)
     {
+        /*
+         * 1. Création de toutes les instances.
+         */
         createInstances(scope, description.instances);
 
+        /*
+         * Ce registry est spécifique au scope.
+         */
         ExplicitConnectionRegistry explicitConnections;
 
-        createExplicitLinks(scope, description.eventLinks, explicitConnections);
-        createImplicitLinks(scope, description.implicitLinks, explicitConnections);
+        /*
+         * 2. Liens explicitement décrits dans le XML.
+         */
+        for (const auto& link : description.eventLinks)
+        {
+            _linkResolver.connectExplicit(scope, link, explicitConnections);
+        }
+
+        /*
+         * 3. Résolution des connexions implicites.
+         */
+        for (const auto& rule : description.implicitLinks)
+        {
+            _implicitLinkResolver.resolve(scope, rule, explicitConnections);
+        }
     }
 
-    void createInstances(
-        CompositeInstance& scope,
-        const std::vector<InstanceDescription>& descriptions)
+    void createInstances(CompositeInstance& scope, const std::vector<InstanceDescription>& descriptions)
     {
         for (const auto& description : descriptions)
         {
-            if (description.kind ==
-                InstanceKind::Component)
+            if (description.kind == InstanceKind::Component)
             {
-                auto component =
-                    _componentFactory.create(
-                        description);
+                auto instance = _componentFactories.create(description);
 
-                scope.addInstance(
-                    std::move(component));
+                scope.addInstance(std::move(instance));
+
+                continue;
             }
-            else
+
+            const CompositeDescription* compositeDescription = findComposite(description.type);
+
+            if (compositeDescription == nullptr)
             {
-                const CompositeDescription*
-                    compositeDescription =
-                        findCompositeDescription(
-                            description.type);
-
-                if (compositeDescription == nullptr)
-                {
-                    throw std::logic_error(
-                        "Unknown composite type: " +
-                        description.type);
-                }
-
-                auto composite =
-                    buildComposite(
-                        description.name,
-                        *compositeDescription);
-
-                scope.addInstance(
-                    std::move(composite));
+                throw std::logic_error(
+                    "Unknown composite type: " +
+                    description.type);
             }
+
+            auto composite = buildComposite(description.name, *compositeDescription);
+
+            scope.addInstance(std::move(composite));
         }
     }
 
-    std::unique_ptr<CompositeInstance>
-    ArchitectureBuilder::buildComposite(
-        const std::string& instanceName,
-        const CompositeDescription& description)
+    std::unique_ptr<CompositeInstance> buildComposite(const std::string& instanceName, const CompositeDescription& description)
     {
-        auto composite =
-            std::make_unique<CompositeInstance>(
-                instanceName);
+        /*
+         * Pas de factory.
+         * Pas de container.
+         *
+         * Le composite est purement architectural.
+         */
+        auto composite = std::make_unique<CompositeInstance>(instanceName);
 
         /*
-        * Construction des véritables composants internes.
-        */
-        buildScope(
-            *composite,
-            description);
+         * Construction de son propre scope.
+         */
+        buildScope(*composite, description);
 
         /*
-        * Les ports internes existent maintenant.
-        * On peut donc publier ceux exposés par le composite.
-        */
-        for (const auto& delegation :
-            description.inputDelegations)
+         * Tous les composants internes existent
+         * désormais, donc les aliases peuvent
+         * être résolus.
+         */
+        for (const auto& delegation : description.inputDelegations)
         {
-            _delegationResolver.connectInput(
-                *composite,
-                delegation);
+            _delegationResolver.exposeInput(*composite, delegation);
         }
 
-        for (const auto& delegation :
-            description.outputDelegations)
+        for (const auto& delegation : description.outputDelegations)
         {
-            _delegationResolver.connectOutput(
-                *composite,
-                delegation);
+            _delegationResolver.exposeOutput(*composite, delegation);
         }
 
         return composite;
     }
 
-    void createExplicitLinks(CompositeInstance& scope, const std::vector<EventLinkDescription>& links, ExplicitConnectionRegistry& explicitConnections)
+    const CompositeDescription* findComposite(const std::string& type) const
     {
-        for (const auto& link : links)
+        if (_architecture == nullptr)
         {
-            _linkResolver.connectExplicit(
-                scope,
-                link,
-                explicitConnections);
+            return nullptr;
         }
-    }
 
-    void createImplicitLinks(CompositeInstance& scope, const std::vector<ImplicitLinkDescription>& links, const ExplicitConnectionRegistry& explicitConnections)
-    {
-        for (const auto& link : links)
+        for (const auto& composite : _architecture->composites)
         {
-            _implicitLinkResolver.resolve(
-                scope,
-                link,
-                explicitConnections);
-        }
-    }
-
-    const CompositeDescription* findCompositeDescription(const std::string& type) const
-    {
-        for (const auto& description : _architecture->composites)
-        {
-            if (description.type == type)
+            if (composite.type == type)
             {
-                return &description;
+                return &composite;
             }
         }
 
@@ -157,8 +143,7 @@ private:
     }
 
 private:
-    IComponentFactory& _componentFactory;
-    ICompositeFactory& _compositeFactory;
+    ComponentFactoryRegistry& _componentFactories;
 
     const ArchitectureDescription* _architecture = nullptr;
 

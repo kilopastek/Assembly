@@ -3,74 +3,49 @@
 #include <stdexcept>
 #include "ArchitectureDescription.h"
 #include "CompositeInstance.h"
-#include "Port.h"
+
+class IOutputPort;
+class IInstance;
+class IInputPort;
 
 class DelegationResolver
 {
 public:
-    void connectInput(
-        CompositeInstance& composite,
-        const InputDelegationDescription& delegation)
+    void exposeInput(CompositeInstance& composite, const InputDelegationDescription& delegation)
     {
-        IInstance* internalInstance =
-            composite.findInstance(
-                delegation.component.instanceName);
+        IInstance* instance = composite.findInstance(delegation.component.instanceName);
 
-        if (internalInstance == nullptr)
+        if (instance == nullptr)
         {
-            throw std::logic_error(
-                "Unknown internal instance: " +
-                delegation.component.instanceName);
+            throw std::logic_error("Unknown internal instance: " + delegation.component.instanceName);
         }
 
-        IInputPort* input =
-            internalInstance->findInputPort(
-                delegation.component.operation);
+        IInputPort* input = instance->findInputPort(delegation.component.operation);
 
         if (input == nullptr)
         {
-            throw std::logic_error(
-                "Unknown internal input port: " +
-                delegation.component.instanceName +
-                "." +
-                delegation.component.operation);
+            throw std::logic_error("Unknown internal input: " + delegation.component.instanceName + "." + delegation.component.operation);
         }
 
-        composite.exposeInputPort(
-            delegation.compositeOperation,
-            *input);
+        composite.exposeInputPort(delegation.compositeOperation, *input);
     }
 
-    void connectOutput(
-    CompositeInstance& composite,
-    const OutputDelegationDescription& delegation)
+    void exposeOutput(CompositeInstance& composite, const OutputDelegationDescription& delegation)
     {
-        IInstance* internalInstance =
-            composite.findInstance(
-                delegation.component.instanceName);
+        IInstance* instance = composite.findInstance(delegation.component.instanceName);
 
-        if (internalInstance == nullptr)
+        if (instance == nullptr)
         {
-            throw std::logic_error(
-                "Unknown internal instance: " +
-                delegation.component.instanceName);
+            throw std::logic_error("Unknown internal instance: " + delegation.component.instanceName);
         }
 
-        IOutputPort* output =
-            internalInstance->findOutputPort(
-                delegation.component.operation);
+        IOutputPort* output = instance->findOutputPort(delegation.component.operation);
 
         if (output == nullptr)
         {
-            throw std::logic_error(
-                "Unknown internal output port: " +
-                delegation.component.instanceName +
-                "." +
-                delegation.component.operation);
+            throw std::logic_error("Unknown internal output: " + delegation.component.instanceName + "." + delegation.component.operation);
         }
 
-        composite.exposeOutputPort(
-            delegation.compositeOperation,
-            *output);
+        composite.exposeOutputPort(delegation.compositeOperation, *output);
     }
 };

@@ -1,18 +1,25 @@
 #pragma once
 
-#include <stdexcept>
+#include <memory>
 #include <string>
-#include <unordered_map>
+#include <utility>
+#include <stdexcept>
 #include <vector>
 #include "IInstance.h"
+#include "IContainer.h"
 #include "Port.h"
 
 class ComponentInstance final : public IInstance
 {
 public:
-    explicit ComponentInstance(std::string name)
+    ComponentInstance(std::string name, std::unique_ptr<IContainer> container)
         : _name(std::move(name))
+        , _container(std::move(container))
     {
+        if (_container == nullptr)
+        {
+            throw std::logic_error("ComponentInstance requires a container");
+        }
     }
 
     const std::string& name() const override
@@ -20,81 +27,54 @@ public:
         return _name;
     }
 
-    void registerInputPort(const std::string& operation, IInputPort& port)
+    IInputPort* findInputPort(const std::string& operation) override
     {
-        const auto result = _inputs.emplace(operation, &port);
-
-        if (!result.second)
-        {
-            throw std::logic_error("Input port already registered: " + _name + "." + operation);
-        }
+        return _container->inputPorts().find(operation);
     }
 
-    void registerOutputPort(const std::string& operation, IOutputPort& port)
+    IOutputPort* findOutputPort(const std::string& operation) override
     {
-        const auto result = _outputs.emplace(operation, &port);
-
-        if (!result.second)
-        {
-            throw std::logic_error("Output port already registered: " + _name + "." + operation);
-        }
+        return _container->outputPorts().find(operation);
     }
 
-    IInputPort* findInputPort(
-        const std::string& operation) override
+    std::vector<InputPortEntry> inputPorts() override
     {
-        const auto it = _inputs.find(operation);
+        std::vector<InputPortEntry> result;
 
-        if (it == _inputs.end())
+        const auto ports = _container->inputPorts().ports();
+
+        result.reserve(ports.size());
+
+        for (const auto& entry : ports)
         {
-            return nullptr;
-        }
-
-        return it->second;
-    }
-
-    IOutputPort* findOutputPort(
-        const std::string& operation) override
-    {
-        const auto it = _outputs.find(operation);
-
-        if (it == _outputs.end())
-        {
-            return nullptr;
-        }
-
-        return it->second;
-    }
-
-    std::vector<IInputPort*> inputPorts() override
-    {
-        std::vector<IInputPort*> result;
-        result.reserve(_inputs.size());
-
-        for (const auto& entry : _inputs)
-        {
-            result.push_back(entry.second);
+            result.push_back({ entry.first, entry.second });
         }
 
         return result;
     }
 
-    std::vector<IOutputPort*> outputPorts() override
+    std::vector<OutputPortEntry> outputPorts() override
     {
-        std::vector<IOutputPort*> result;
-        result.reserve(_outputs.size());
+        std::vector<OutputPortEntry> result;
 
-        for (const auto& entry : _outputs)
+        const auto ports = _container->outputPorts().ports();
+
+        result.reserve(ports.size());
+
+        for (const auto& entry : ports)
         {
-            result.push_back(entry.second);
+            result.push_back({ entry.first, entry.second });
         }
 
         return result;
+    }
+
+    IContainer& container()
+    {
+        return *_container;
     }
 
 private:
     std::string _name;
-
-    std::unordered_map<std::string, IInputPort*> _inputs;
-    std::unordered_map<std::string, IOutputPort*> _outputs;
+    std::unique_ptr<IContainer> _container;
 };
