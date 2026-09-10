@@ -1,10 +1,22 @@
 #pragma once
-
 #include <string>
 #include <vector>
 
 class IInputPort;
 class IOutputPort;
+struct InputPortEntry
+{
+    std::string name;
+    IInputPort* port = nullptr;
+};
+
+
+struct OutputPortEntry
+{
+    std::string name;
+    IOutputPort* port = nullptr;
+};
+
 
 class IInstance
 {
@@ -17,6 +29,7 @@ public:
 
     virtual IOutputPort* findOutputPort(const std::string& operation) = 0;
 
-    virtual std::vector<IInputPort*> inputPorts() = 0;
-    virtual std::vector<IOutputPort*> outputPorts() = 0;
+    virtual std::vector<InputPortEntry> inputPorts() = 0;
+
+    virtual std::vector<OutputPortEntry> outputPorts() = 0;
 };

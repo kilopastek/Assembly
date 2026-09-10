@@ -1,11 +1,16 @@
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <functional>
+#include <stdexcept>
+#include <tuple>
 #include <typeindex>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// Interfaces des ports
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 class IInputPort
 {
 public:
@@ -14,58 +19,6 @@ public:
     virtual std::type_index signature() const noexcept = 0;
 };
 
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// Interface typée intermédiaire
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  
-
-template<typename Signature>
-class ITypedInputPort;
-
-template<typename... Args>
-class ITypedInputPort<void(Args...)> : public IInputPort
-{
-public:
-    using SignatureType = void(Args...);
-
-    std::type_index signature() const noexcept override
-    {
-        return typeid(SignatureType);
-    }
-
-    virtual void receive(Args... args) = 0;
-};
-
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// InputPort class definition
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-template<typename Signature>
-class InputPort;
-
-template<typename... Args>
-class InputPort<void(Args...)> final : public ITypedInputPort<void(Args...)>
-{
-public:
-    using Callback = std::function<void(Args...)>;
-
-    template<typename Callable>
-    explicit InputPort(Callable&& callback)
-        : _callback(std::forward<Callable>(callback))
-    {
-    }
-
-    void receive(Args... args) override
-    {
-        _callback(args...);
-    }
-
-private:
-    Callback _callback;
-};
-
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// IOutputPort interface definition
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 class IOutputPort
 {
@@ -77,15 +30,46 @@ public:
     virtual void connectTo(IInputPort& input) = 0;
 
     virtual std::size_t connectionCount() const noexcept = 0;
+
     virtual bool isConnected() const noexcept = 0;
 };
 
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// OutputPort class definition
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+template<typename Signature>
+class InputPort;
+
+
+template<typename... Args>
+class InputPort<void(Args...)> final : public IInputPort
+{
+public:
+    using SignatureType = void(Args...);
+    using Callback = std::function<void(Args...)>;
+
+    template<typename Callable>
+    explicit InputPort(Callable&& callback)
+        : _callback(std::forward<Callable>(callback))
+    {
+    }
+
+    std::type_index signature() const noexcept override
+    {
+        return typeid(SignatureType);
+    }
+
+    void receive(Args... args)
+    {
+        _callback(args...);
+    }
+
+private:
+    Callback _callback;
+};
+
 
 template<typename Signature>
 class OutputPort;
+
 
 template<typename... Args>
 class OutputPort<void(Args...)> final : public IOutputPort
@@ -109,15 +93,31 @@ public:
             throw std::logic_error("Connexion de ports incompatibles");
         }
 
-        _receivers.push_back(typedInput);
+        /*
+         * Évite de connecter deux fois exactement
+         * le même port.
+         */
+        const auto it = std::find(_receivers.begin(), _receivers.end(), typedInput);
+
+        if (it == _receivers.end())
+        {
+            _receivers.push_back(typedInput);
+        }
     }
 
     void send(Args... args)
     {
+        /*
+         * Copie représentant le message produit
+         * par l'émetteur.
+         */
         const Message emittedMessage(args...);
 
-        for (InputPort<SignatureType>* receiver : _receivers)
+        for (auto* receiver : _receivers)
         {
+            /*
+             * Chaque récepteur reçoit sa propre copie.
+             */
             Message receivedMessage = emittedMessage;
 
             std::apply(
@@ -125,8 +125,7 @@ public:
                 {
                     receiver->receive(values...);
                 },
-                receivedMessage
-            );
+                receivedMessage);
         }
     }
 
@@ -142,16 +141,4 @@ public:
 
 private:
     std::vector<InputPort<SignatureType>*> _receivers;
-};
-
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// IDelegatingInputPort interface definition
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-class IDelegatingInputPort
-{
-public:
-    virtual ~IDelegatingInputPort() = default;
-
-    virtual void delegateTo(IInputPort& input) = 0;
 };

@@ -1,11 +1,9 @@
 #pragma once
 
-#include <memory>
-#include <stdexcept>
 #include <string>
+#include <memory>
 #include <unordered_map>
-#include <utility>
-#include <vector>
+#include <stdexcept>
 #include "IInstance.h"
 
 class CompositeInstance final : public IInstance
@@ -21,12 +19,11 @@ public:
         return _name;
     }
 
-    void addInstance(
-        std::unique_ptr<IInstance> instance)
+    void addInstance(std::unique_ptr<IInstance> instance)
     {
         if (instance == nullptr)
         {
-            throw std::logic_error("Cannot add null instance");
+            throw std::logic_error("Tentative d'ajout d'une instance nulle");
         }
 
         const std::string instanceName = instance->name();
@@ -35,7 +32,7 @@ public:
 
         if (!result.second)
         {
-            throw std::logic_error("Instance already exists: " + instanceName);
+            throw std::logic_error("Instance dupliquee : " + instanceName);
         }
     }
 
@@ -49,78 +46,6 @@ public:
         }
 
         return it->second.get();
-    }
-
-    void exposeInputPort(const std::string& operation, IInputPort& port)
-    {
-        const auto result = _inputs.emplace(operation, &port);
-
-        if (!result.second)
-        {
-            throw std::logic_error("Composite input already exposed: " + _name + "." + operation);
-        }
-    }
-
-    void exposeOutputPort(const std::string& operation, IOutputPort& port)
-    {
-        const auto result = _outputs.emplace(operation, &port);
-
-        if (!result.second)
-        {
-            throw std::logic_error("Composite output already exposed: " + _name + "." + operation);
-        }
-    }
-
-    IInputPort* findInputPort(const std::string& operation) override
-    {
-        const auto it = _inputs.find(operation);
-
-        if (it == _inputs.end())
-        {
-            return nullptr;
-        }
-
-        return it->second;
-    }
-
-    IOutputPort* findOutputPort(const std::string& operation) override
-    {
-        const auto it = _outputs.find(operation);
-
-        if (it == _outputs.end())
-        {
-            return nullptr;
-        }
-
-        return it->second;
-    }
-
-    std::vector<InputPortEntry> inputPorts() override
-    {
-        std::vector<InputPortEntry> result;
-
-        result.reserve(_inputs.size());
-
-        for (const auto& entry : _inputs)
-        {
-            result.push_back({ entry.first, entry.second });
-        }
-
-        return result;
-    }
-
-    std::vector<OutputPortEntry> outputPorts() override
-    {
-        std::vector<OutputPortEntry> result;
-
-        result.reserve(_outputs.size());
-
-        for (const auto& entry : _outputs)
-        {
-            result.push_back({ entry.first, entry.second });
-        }
-
-        return result;
     }
 
     std::vector<IInstance*> instances()
@@ -137,20 +62,86 @@ public:
         return result;
     }
 
+    void exposeInput(const std::string& operation, IInputPort& port)
+    {
+        const auto result = _exposedInputs.emplace(operation, &port);
+
+        if (!result.second)
+        {
+            throw std::logic_error("Input composite duplique : " + _name + "." + operation);
+        }
+    }
+
+    void exposeOutput(const std::string& operation, IOutputPort& port)
+    {
+        const auto result = _exposedOutputs.emplace(operation, &port);
+
+        if (!result.second)
+        {
+            throw std::logic_error("Output composite duplique : " + _name + "." + operation);
+        }
+    }
+
+    IInputPort* findInputPort(const std::string& operation) override
+    {
+        const auto it = _exposedInputs.find(operation);
+
+        if (it == _exposedInputs.end())
+        {
+            return nullptr;
+        }
+
+        return it->second;
+    }
+
+    IOutputPort* findOutputPort(const std::string& operation) override
+    {
+        const auto it = _exposedOutputs.find(operation);
+
+        if (it == _exposedOutputs.end())
+        {
+            return nullptr;
+        }
+
+        return it->second;
+    }
+
+    std::vector<InputPortEntry> inputPorts() override
+    {
+        std::vector<InputPortEntry> result;
+
+        for (const auto& entry : _exposedInputs)
+        {
+            result.push_back({ entry.first, entry.second });
+        }
+
+        return result;
+    }
+
+    std::vector<OutputPortEntry> outputPorts() override
+    {
+        std::vector<OutputPortEntry> result;
+
+        for (const auto& entry : _exposedOutputs)
+        {
+            result.push_back({ entry.first, entry.second });
+        }
+
+        return result;
+    }
+
 private:
     std::string _name;
 
-    /*
-     * Les vraies instances du scope.
-     */
     std::unordered_map<std::string, std::unique_ptr<IInstance>> _instances;
 
     /*
-     * Simple table d'alias.
+     * Ce ne sont PAS des registries runtime.
      *
-     * Aucun port n'est possédé par le composite.
+     * Ce sont uniquement des alias vers les ports
+     * internes visibles depuis le scope parent.
      */
-    std::unordered_map<std::string, IInputPort*> _inputs;
+    std::unordered_map<std::string, IInputPort*> _exposedInputs;
 
-    std::unordered_map<std::string, IOutputPort*> _outputs;
+    std::unordered_map<std::string, IOutputPort*> _exposedOutputs;
 };

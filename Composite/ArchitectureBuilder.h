@@ -1,153 +1,147 @@
 #pragma once
 
 #include <memory>
-#include <stdexcept>
-#include "ArchitectureDescription.h"
-#include "CompositeInstance.h"
-#include "IComponentFactory.h"
-#include "ICompositeFactory.h"
-#include "LinkResolver.h"
-#include "ImplicitLinkResolver.h"
-#include "DelegationResolver.h"
-#include "ComponentFactoryRegistry.h"
 
 class ArchitectureBuilder
 {
 public:
-    explicit ArchitectureBuilder(ComponentFactoryRegistry& componentFactories)
-        : _componentFactories(componentFactories)
+    ArchitectureBuilder(
+        const ComponentPathResolver& paths,
+        const ComponentDescriptionLoader& componentLoader,
+        const AssemblyDescriptionLoader& assemblyLoader,
+        ComponentDescriptionRegistry& componentDescriptions,
+        AssemblyDescriptionRegistry& assemblyDescriptions,
+        ComponentBuilderRegistry& componentBuilders)
+        : _paths(paths)
+        , _componentLoader(componentLoader)
+        , _assemblyLoader(assemblyLoader)
+        , _componentDescriptions(componentDescriptions)
+        , _assemblyDescriptions(assemblyDescriptions)
+        , _componentBuilders(componentBuilders)
     {
     }
 
-    std::unique_ptr<CompositeInstance> build(const ArchitectureDescription& architecture)
+    std::unique_ptr<CompositeInstance> build(const std::string& rootComponentType)
     {
-        _architecture = &architecture;
-
         /*
-         * Scope racine synthétique.
+         * Cas particulier :
+         * le composant initial est situé dans
+         * le dossier Composant et est toujours
+         * un composite.
          */
-        auto root = std::make_unique<CompositeInstance>("$root");
 
-        buildScope(*root, architecture);
+        const ComponentDescription interfaceDescription = _componentLoader.load(_paths.rootComponentFile(rootComponentType));
 
-        return root;
+        const AssemblyDescription assemblyDescription = _assemblyLoader.load(_paths.rootAssemblyFile(rootComponentType));
+
+        return buildComposite(rootComponentType, interfaceDescription, assemblyDescription);
     }
 
 private:
-    void buildScope(CompositeInstance& scope, const ScopeDescription& description)
+    std::unique_ptr<IInstance> buildInstance(const InstanceDescription& description)
     {
-        /*
-         * 1. Création de toutes les instances.
-         */
-        createInstances(scope, description.instances);
+        if (!description.isComposite())
+        {
+            /*
+             * C ou CPP :
+             * création par le code fourni
+             * par le développeur.
+             */
+            return _componentBuilders.create(description);
+        }
 
         /*
-         * Ce registry est spécifique au scope.
+         * Composite :
+         *
+         * Modules/<type>/<type>.comp.xml
+         *
+         * +
+         *
+         * Modules/<type>/composite/
+         *     <type>.composite.assembly.xml
+         */
+
+        const ComponentDescription& interfaceDescription = _componentDescriptions.getModule(description.componentType);
+
+        const AssemblyDescription& assemblyDescription = _assemblyDescriptions.getModule(description.componentType);
+
+        return buildComposite(description.name, interfaceDescription, assemblyDescription);
+    }
+
+    std::unique_ptr<CompositeInstance> buildComposite(
+        const std::string& instanceName,
+        const ComponentDescription& interfaceDescription,
+        const AssemblyDescription& assemblyDescription)
+    {
+        auto composite = std::make_unique<CompositeInstance>(instanceName);
+
+        /*
+         * 1. Toutes les instances internes sont
+         *    construites.
+         *
+         * Les composites enfants sont donc entièrement
+         * construits avant de poursuivre.
+         */
+        for (const auto& instance : assemblyDescription.instances)
+        {
+            composite->addInstance(buildInstance(instance));
+        }
+
+        /*
+         * Registry local au scope courant.
+         *
+         * Un eventLink situé dans ce composite ne
+         * concerne que ce composite.
          */
         ExplicitConnectionRegistry explicitConnections;
 
         /*
-         * 2. Liens explicitement décrits dans le XML.
+         * 2. Liens explicites.
          */
-        for (const auto& link : description.eventLinks)
+        for (const auto& link : assemblyDescription.eventLinks)
         {
-            _linkResolver.connectExplicit(scope, link, explicitConnections);
+            _linkResolver.connect(*composite, link, explicitConnections);
         }
 
         /*
-         * 3. Résolution des connexions implicites.
-         */
-        for (const auto& rule : description.implicitLinks)
-        {
-            _implicitLinkResolver.resolve(scope, rule, explicitConnections);
-        }
-    }
-
-    void createInstances(CompositeInstance& scope, const std::vector<InstanceDescription>& descriptions)
-    {
-        for (const auto& description : descriptions)
-        {
-            if (description.kind == InstanceKind::Component)
-            {
-                auto instance = _componentFactories.create(description);
-
-                scope.addInstance(std::move(instance));
-
-                continue;
-            }
-
-            const CompositeDescription* compositeDescription = findComposite(description.type);
-
-            if (compositeDescription == nullptr)
-            {
-                throw std::logic_error(
-                    "Unknown composite type: " +
-                    description.type);
-            }
-
-            auto composite = buildComposite(description.name, *compositeDescription);
-
-            scope.addInstance(std::move(composite));
-        }
-    }
-
-    std::unique_ptr<CompositeInstance> buildComposite(const std::string& instanceName, const CompositeDescription& description)
-    {
-        /*
-         * Pas de factory.
-         * Pas de container.
+         * 3. Liens implicites.
          *
-         * Le composite est purement architectural.
+         * Le matching se fait uniquement entre les
+         * instances directement visibles dans ce scope.
          */
-        auto composite = std::make_unique<CompositeInstance>(instanceName);
-
-        /*
-         * Construction de son propre scope.
-         */
-        buildScope(*composite, description);
-
-        /*
-         * Tous les composants internes existent
-         * désormais, donc les aliases peuvent
-         * être résolus.
-         */
-        for (const auto& delegation : description.inputDelegations)
+        for (const auto& rule : assemblyDescription.implicitLinks)
         {
-            _delegationResolver.exposeInput(*composite, delegation);
+            _implicitLinkResolver.resolve(*composite, rule, explicitConnections);
         }
 
-        for (const auto& delegation : description.outputDelegations)
-        {
-            _delegationResolver.exposeOutput(*composite, delegation);
-        }
+        /*
+         * 4. Interface externe.
+         *
+         * Une fois toutes les instances internes
+         * construites, le composite recherche ses
+         * ports exposés.
+         */
+        _compositeInterfaceResolver.resolve(*composite, interfaceDescription);
 
         return composite;
     }
 
-    const CompositeDescription* findComposite(const std::string& type) const
-    {
-        if (_architecture == nullptr)
-        {
-            return nullptr;
-        }
-
-        for (const auto& composite : _architecture->composites)
-        {
-            if (composite.type == type)
-            {
-                return &composite;
-            }
-        }
-
-        return nullptr;
-    }
-
 private:
-    ComponentFactoryRegistry& _componentFactories;
+    const ComponentPathResolver& _paths;
 
-    const ArchitectureDescription* _architecture = nullptr;
+    const ComponentDescriptionLoader& _componentLoader;
+
+    const AssemblyDescriptionLoader& _assemblyLoader;
+
+    ComponentDescriptionRegistry& _componentDescriptions;
+
+    AssemblyDescriptionRegistry& _assemblyDescriptions;
+
+    ComponentBuilderRegistry& _componentBuilders;
 
     LinkResolver _linkResolver;
+
     ImplicitLinkResolver _implicitLinkResolver;
-    DelegationResolver _delegationResolver;
+
+    CompositeInterfaceResolver _compositeInterfaceResolver;
 };

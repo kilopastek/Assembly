@@ -1,13 +1,8 @@
 #pragma once
-
-#include <memory>
 #include <string>
-#include <utility>
-#include <stdexcept>
-#include <vector>
-#include "IInstance.h"
+#include <memory>
 #include "IContainer.h"
-#include "Port.h"
+#include "IInstance.h"
 
 class ComponentInstance final : public IInstance
 {
@@ -18,7 +13,7 @@ public:
     {
         if (_container == nullptr)
         {
-            throw std::logic_error("ComponentInstance requires a container");
+            throw std::logic_error("Container nul pour " + _name);
         }
     }
 
@@ -41,13 +36,9 @@ public:
     {
         std::vector<InputPortEntry> result;
 
-        const auto ports = _container->inputPorts().ports();
-
-        result.reserve(ports.size());
-
-        for (const auto& entry : ports)
+        for (const auto& entry : _container->inputPorts().ports())
         {
-            result.push_back({ entry.first, entry.second });
+            result.push_back({entry.first, entry.second});
         }
 
         return result;
@@ -57,13 +48,9 @@ public:
     {
         std::vector<OutputPortEntry> result;
 
-        const auto ports = _container->outputPorts().ports();
-
-        result.reserve(ports.size());
-
-        for (const auto& entry : ports)
+        for (const auto& entry : _container->outputPorts().ports())
         {
-            result.push_back({ entry.first, entry.second });
+            result.push_back({entry.first, entry.second});
         }
 
         return result;

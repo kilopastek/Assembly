@@ -1,7 +1,5 @@
 #pragma once
-
-#include "InputPortRegistry.h"
-#include "OutputPortRegistry.h"
+#include "PortRegistry.h"
 
 class IContainer
 {
