@@ -33,6 +33,10 @@ function(add_test_components target)
             "${generated_dir}/${component_name}.generated.hpp"
         )
 
+        set(component_impl_xml
+            "${COMPONENTS_ROOT}/${component_path}/${component_name}/CPP/${component_name}.comp.impl.xml"
+        )
+
         add_custom_command(
             OUTPUT "${generated_header}"
 

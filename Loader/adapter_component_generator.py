@@ -50,6 +50,7 @@ class Event:
 @dataclass
 class Component:
     name: str
+    cpp_name: str
     sent_events: list[Event]
     received_events: list[Event]
 
@@ -59,22 +60,12 @@ class Component:
 # =============================================================================
 
 def cpp_type(xml_type: str, common_namespace: str) -> str:
-    """
-    Convert a type appearing in the .comp.xml into its C++ type.
-
-    Framework primitive:
-        int32 -> system::int32_t
-
-    Application/common type:
-        Status -> common::Status
-    """
 
     if xml_type in FRAMEWORK_TYPES:
         return FRAMEWORK_TYPES[xml_type]
 
-    if "::" in xml_type:
-        # Already qualified.
-        return xml_type
+    if "." in xml_type:
+        return xml_type.replace(".", "::")
 
     return f"{common_namespace}::{xml_type}"
 
@@ -143,23 +134,20 @@ def parse_event(
     )
 
 
-def parse_component(
-    xml_file: Path,
-    common_namespace: str
-) -> Component:
+def parse_component(xml_file: Path, common_namespace: str) -> Component:
 
     try:
         tree = ET.parse(xml_file)
     except ET.ParseError as error:
-        raise RuntimeError(
-            f"Invalid XML file '{xml_file}': {error}"
-        ) from error
+        raise RuntimeError(f"Invalid XML file '{xml_file}': {error}") from error
 
     root = tree.getroot()
 
-    component_name = xml_file.name.removesuffix(
-        ".comp.xml"
-    )
+    component_name = xml_file.name.removesuffix(".comp.xml")
+
+    xml_name = xml_file.name[:-len(".comp.xml")]
+    impl_xml = (xml_file.parent / "CPP" / "{}.comp.impl.xml".format(xml_name))
+    cpp_name = parse_cpp_component_name(impl_xml)
 
     sent_events = []
     received_events = []
@@ -167,34 +155,47 @@ def parse_component(
     operations = root.find(".//operations")
 
     if operations is None:
-        raise RuntimeError(
-            f"No <operations> element found in '{xml_file}'"
-        )
+        raise RuntimeError(f"No <operations> element found in '{xml_file}'")
 
     for node in operations:
 
         if node.tag == "eventSent":
-            sent_events.append(
-                parse_event(
-                    node,
-                    common_namespace
-                )
-            )
+            sent_events.append(parse_event(node, common_namespace))
 
         elif node.tag == "eventReceive":
-            received_events.append(
-                parse_event(
-                    node,
-                    common_namespace
-                )
-            )
+            received_events.append(parse_event(node, common_namespace))
 
     return Component(
         name=component_name,
+        cpp_name=cpp_name,
         sent_events=sent_events,
         received_events=received_events
     )
 
+
+def parse_cpp_component_name(impl_xml):
+
+    if not impl_xml.is_file():
+        raise RuntimeError("Component implementation file not found: '{}'".format(impl_xml))
+
+    try:
+        tree = ET.parse(impl_xml)
+    except ET.ParseError as error:
+        raise RuntimeError("Invalid XML file '{}': {}".format(impl_xml, error))
+
+    root = tree.getroot()
+
+    for child in root:
+        if local_name(child.tag) == "language.cpp":
+
+            cpp_name = child.get("namespace")
+
+            if not cpp_name:
+                raise RuntimeError("Missing 'namespace' attribute on <language.cpp>")
+
+            return cpp_name
+
+    raise RuntimeError("No <language.cpp> element found in '{}'".format(impl_xml))
 
 # =============================================================================
 # C++ helpers
@@ -450,4 +451,4 @@ if __name__ == "__main__":
 # generate_test_component.py \
 #    --xml External/Message/Message.comp.xml \
 #    --output build/generated/External/Message.generated.hpp \
-    --namespace application
+#    --namespace application
