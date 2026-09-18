@@ -52,6 +52,7 @@ function(add_test_components target)
 
             DEPENDS
                 "${component_xml}"
+                "${component_impl_xml}"
                 "${TEST_COMPONENT_GENERATOR}"
 
             COMMENT
